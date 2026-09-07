@@ -76,10 +76,11 @@ agent_created: true
    - 无 `origin` → `git -C <dir> remote add origin <url>`；
    - 有 `origin` 但 URL 不符 → `git -C <dir> remote set-url origin <url>`。
 4. **拉取远端引用**：`git -C <dir> fetch origin`（需联网 + GitHub 凭证；缺失则本步中止并报原因）。
-5. **确定默认分支**：`DEFAULT_BRANCH=$(git -C <dir> symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo main)`；若 `origin/<DEFAULT_BRANCH>` 不存在，回退 `master`。
-6. **对齐本地仓库与远端（仅初始化场景）**：
-   - 本地尚无提交时，用 `git -C <dir> reset --mixed origin/<DEFAULT_BRANCH>` 将 HEAD 指向远端提交、重置索引，但**保留工作区文件**（被 Step 3 跳过的二进制文件以未跟踪状态保留，不会被删）。配合 `core.autocrlf=false`，内容与远端一致时工作区即干净。
-   - 已存在本地提交（重跑场景）→ **不要 reset**，避免丢弃本地历史；直接跳到步骤 7。
+5. **确定默认分支**（提取纯分支名，不含 `origin/` 前缀）：`DEFAULT_BRANCH=$(git -C <dir> symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's#^refs/remotes/origin/##')`；为空则 `DEFAULT_BRANCH=main`；若 `origin/<DEFAULT_BRANCH>` 引用不存在，回退 `master`。
+6. **对齐本地仓库与远端**：
+   - 本地尚无提交（初始化场景）→ `git -C <dir> reset --mixed origin/<DEFAULT_BRANCH>`：HEAD 指向远端提交、重置索引，但**保留工作区文件**（被 Step 3 跳过的二进制文件以未跟踪状态保留，不会被删）。配合 `core.autocrlf=false`，内容与远端一致时工作区即干净。
+   - 本地已有提交（重跑 / 已是仓库场景）→ 优先 `git -C <dir> merge --ff-only origin/<DEFAULT_BRANCH>`（仅快进，不丢失本地历史）；若不可快进（本地与远端分叉），**不要 reset**，提示用户手动 `git pull` / `git rebase`，直接跳到步骤 7。
+   - 行尾符差异：`reset` / `merge` 后若 `git status` 仍显示文件 modified 且 `git diff --ignore-all-space` 为空，说明是 CRLF/LF 差异，执行 `git -C <dir> checkout -- .` 将工作区归一为远端 LF 即可变干净。
 7. **设置跟踪**：`git -C <dir> branch -u origin/<DEFAULT_BRANCH> <DEFAULT_BRANCH>`（初始化场景因 reset 已存在该分支；重跑场景若分支已缺则仅写配置：`git -C <dir> config branch.<DEFAULT_BRANCH>.remote origin && git -C <dir> config branch.<DEFAULT_BRANCH>.merge refs/heads/<DEFAULT_BRANCH>`）。
 8. **校验**：`git -C <dir> status` 应显示 `up to date with 'origin/<DEFAULT_BRANCH>'` 或 `nothing to commit, working tree clean`（被跳过的二进制文件可能列为 untracked，属正常）。
 
@@ -119,7 +120,7 @@ agent_created: true
 - 目录为空或无源码文件：至少生成并推送 README.md。
 - 大量文件时仍可一次 `push_files` 调用完成；文件过多或单文件过大可分批。
 - 敏感文件（`.env`、密钥、证书）默认排除，不要推送。
-- Step 6.5 本地初始化为「尽力而为」：本地无 git / 断网 / 无 GitHub 凭证时，远端推送仍成功，仅跳过本地建仓并提示原因。重跑（本地已有提交）时不执行 `reset`，以免丢弃本地历史。
+- Step 6.5 本地初始化为「尽力而为」：本地无 git / 断网 / 无 GitHub 凭证时，远端推送仍成功，仅跳过本地建仓并提示原因。重跑（本地已有提交）时优先 `merge --ff-only`，不可快进则提示用户手动 `git pull`/`rebase`，不执行 `reset` 以免丢弃本地历史。
 
 ## 使用示例
 
