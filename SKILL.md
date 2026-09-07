@@ -1,0 +1,124 @@
+---
+name: github-push
+description: This skill should be used when the user wants to push or upload a local project to GitHub. It auto-generates a README.md when one is missing, then creates the repository and pushes all files via the github MCP connector. Trigger phrases include: 推送到GitHub、上传到GitHub、push到GitHub、发布到GitHub、github push、上传项目到github、把项目推到github.
+agent_created: true
+---
+
+# Github Push
+
+## Overview
+
+将本地项目目录推送到 GitHub：收集文件 → 缺 README 则自动生成 → 用 github MCP 创建仓库并一次性 push。不依赖本地 `gh` CLI，也不要求本地 git 已有 remote。
+
+## 前置条件
+
+- `github` 连接器已连接（提供 `mcp__github__*` 工具）。
+- 本地 `gh` CLI 可不存在；本地 git 身份仅用于 commit 信息参考。
+
+## 工作流
+
+### Step 1: 确认目标与参数
+
+向用户确认（不确定时用 AskUserQuestion，勿猜测）：
+
+- 项目目录（默认当前工作目录）。
+- 仓库名（默认取目录名，须符合 GitHub 规则：小写字母、数字、`-`、`.`、`_`）。
+- 可见性：`private`（默认，GitHub 新仓库默认私有）/ `public`，让用户明确选择。
+- 组织名（可选，省略则推到个人账号）。
+
+### Step 2: 检查并生成 README.md
+
+1. 在项目根目录查找 README（`README.md`、`README.markdown`、`readme.md`、`README` 等，大小写不敏感）。
+2. 存在 → 直接使用，不改动。
+3. 缺失 → 按 `references/readme-generation.md` 的规则生成 README.md，写入项目根目录。
+
+### Step 3: 收集文件清单
+
+1. 用 Glob（`**/*`）递归列出所有文件。
+2. 排除默认目录/文件：`.git/`、`node_modules/`、`.workbuddy/`、`dist/`、`build/`、`__pycache__/`、`.venv/`、`venv/`、`.idea/`、`.vscode/`、`.DS_Store`、`*.pyc`、`*.log`、`.env`、`*.lock`（可选）。
+3. 只推送文本文件。`push_files` 的 `content` 字段仅接受文本（MCP 内部按 UTF-8 处理，二进制字节会损坏）。**按文件内容而非文件名判断**：`.hex`/`.s19`/`.srec`/`.map` 等实为 ASCII 文本，可正常推送；真二进制（`.bin`/`.elf`/`.axf`/`.o`/`.exe`/图片/字体/压缩包等）检测到后默认跳过并列出，若必须提交改用下方「含二进制文件的项目」方案。
+
+### Step 4: 获取账号信息
+
+- 调用 `mcp__github__get_me` 获取登录用户名作为 `owner`。
+- 用户指定组织时，`owner` 用组织名。
+
+### Step 5: 创建仓库
+
+调用 `mcp__github__create_repository`：
+
+- `name`: 仓库名
+- `private`: `true` / `false`
+- `description`: 项目一句话描述
+- `organization`: 可选
+- 不要设 `autoInit: true`（会生成带 README 的初始提交，与后续 push 冲突）。
+- 若返回 `403 Resource not accessible by integration`：连接器无 Administration/建仓权限。此权限由连接器请求的 scope 决定，重新授权也无法自行添加。改为让用户在网页手动创建空仓库（勿初始化 README），再继续 Step 6 用 `push_files` 推送（Contents 权限通常正常）。
+
+### Step 6: 推送文件
+
+调用 `mcp__github__push_files`，一次性传入所有文件（含 README.md）：
+
+- `owner` / `repo`：同 Step 5。
+- `branch`：`main`（新仓库默认）。若报分支不存在，改试 `master`。
+- `files`: `[{path, content}]`，`content` 为文件原始文本，**不要 base64**，path 用相对仓库根的路径（如 `src/index.js`）。
+- `message`: commit 信息，如 `Initial commit`。
+
+### Step 7: 验证与反馈
+
+- push 成功后报告仓库 URL（`https://github.com/<owner>/<repo>`）与推送文件数。
+- 列出被跳过的二进制文件及原因。
+
+## 含二进制文件的项目
+
+`push_files` / `create_or_update_file` 的 `content` 均为字符串，无法可靠提交二进制文件（图片、字体、编译产物、压缩包等）。需一并提交时，改用本地 git 推送：
+
+1. `git init`（若非仓库）→ `git add -A` → `git commit -m "Initial commit"`。
+2. `git remote add origin https://github.com/<owner>/<repo>.git`。
+3. `git push -u origin main`。
+
+注意：本地 git 推送需要 GitHub 认证（HTTPS PAT 或 SSH key）。MCP 连接器的 token 不直接暴露给 git CLI，须先确认用户已配置凭据，否则提示用户提供 PAT 或配置 SSH。
+
+## 注意事项
+
+- `push_files` 与 `create_or_update_file` 的 `content` 均为原始文本，勿 base64。
+- 仓库已存在时 `create_repository` 会报错：改用 `create_or_update_file` 增量写入，或询问用户是否推送到新仓库名。
+- 目录为空或无源码文件：至少生成并推送 README.md。
+- 大量文件时仍可一次 `push_files` 调用完成；文件过多或单文件过大可分批。
+- 敏感文件（`.env`、密钥、证书）默认排除，不要推送。
+
+## 使用示例
+
+### 例 1：把当前项目推到 GitHub（自动生成 README）
+
+用户：「把当前项目推送到 GitHub」
+
+1. 目录 = 当前工作目录，仓库名 = 目录名，用 AskUserQuestion 确认 private / public。
+2. 无 README → 检测到 `package.json` → 按 references 生成 Node 项目 README（含 `npm install` / `npm run start`）。
+3. Glob 收集源码，排除 `node_modules`。
+4. `get_me` 取 owner → `create_repository`（`private: true`，不设 autoInit）→ `push_files` 一次推送（含 README.md）。
+5. 报告 `https://github.com/<owner>/<repo>` 及文件数。
+
+### 例 2：STM32 固件项目（区分 .hex 与 .bin）
+
+用户：「把 STM32 项目推到 GitHub」
+
+1. `.c`/`.h`/工程文件 → 文本，推送。
+2. `.hex`（Intel HEX ASCII）→ 文本，推送。
+3. `.bin`/`.elf`/`.o` → 二进制，默认跳过并在回复中列出；若用户坚持要提交，切到「含二进制文件的项目」本地 git push 方案（需 PAT/SSH）。
+
+### 例 3：指定公开仓库 + 组织
+
+用户：「推到 GitHub，公开仓库，放到 org xyz」
+
+→ `create_repository` 用 `private: false`、`organization: "xyz"`，owner 用组织名，其余流程同例 1。
+
+### 例 4：仓库已存在（增量更新）
+
+用户：「再推一次到这个仓库」
+
+1. `create_repository` 会报错（已存在）。
+2. 改用 `create_or_update_file` 对变更文件逐个写入（更新文件需先用 `get_file_contents` 取 `sha`），或询问是否换新仓库名。
+
+## Resources
+
+- `references/readme-generation.md` — README 自动生成规则、项目类型识别与模板。
