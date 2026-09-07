@@ -8,12 +8,12 @@ agent_created: true
 
 ## Overview
 
-将本地项目目录推送到 GitHub：收集文件 → 缺 README 则自动生成 → 用 github MCP 创建仓库并一次性 push。不依赖本地 `gh` CLI，也不要求本地 git 已有 remote。
+将本地项目目录推送到 GitHub：收集文件 → 缺 README 则自动生成 → 用 github MCP 创建仓库并一次性 push → **推送成功后顺带在本地目录初始化 git 仓库并关联 `origin`，使本地与 GitHub 双向同步**（见 Step 6.5）。不依赖本地 `gh` CLI，也不要求推送前本地 git 已有 remote。
 
 ## 前置条件
 
 - `github` 连接器已连接（提供 `mcp__github__*` 工具，可推送文件，但**无建仓权限**）。
-- `github-push-pat` MCP server（PAT 认证）已配置并「信任」（提供 `mcp__github-push-pat__*` 工具，**可建仓**）。若未启用，建仓走下方「建仓失败（403）的备用方案」。
+- `github-push-pat` MCP server（PAT 认证）已配置并「信任」（提供 `mcp__github-push-pat__*` 工具，**可建仓**）。若未启用，建仓走下方「建仓失败（403）的备用方案」.
 - 本地 `gh` CLI 可不存在；本地 git 身份仅用于 commit 信息参考。
 
 ## 工作流
@@ -64,9 +64,31 @@ agent_created: true
 - `files`: `[{path, content}]`，`content` 为文件原始文本，**不要 base64**，path 用相对仓库根的路径（如 `src/index.js`）。
 - `message`: commit 信息，如 `Initial commit`。
 
+### Step 6.5: 推送后本地初始化 git 仓库（关联远端）
+
+`push_files` 走 API，不会在本地建仓。为让本地项目目录与 GitHub 双向同步，推送成功后顺带把本地目录变成已连接 `origin` 的 git 仓库。本步为「尽力而为」：若本地 git / 联网 / 凭证不可用，远端推送仍视为成功，仅跳过本步并在反馈中说明。
+
+1. **判断是否已是 git 仓库**：`git -C <dir> rev-parse --is-inside-work-tree 2>/dev/null`。
+   - 已是 → 跳到步骤 4（仅补齐 remote 与 upstream，不破坏现有历史）。
+   - 不是 → `git -C <dir> init -b main`（不立即提交，避免产生与远端无关的独立历史）。
+2. **写仓库级配置，防 Windows 行尾符误判**：`git -C <dir> config core.autocrlf false`（保持与 GitHub 一致的 LF，避免后续提交来回转换）。
+3. **设置远端**（URL 取 `https://github.com/<owner>/<repo>.git`）：
+   - 无 `origin` → `git -C <dir> remote add origin <url>`；
+   - 有 `origin` 但 URL 不符 → `git -C <dir> remote set-url origin <url>`。
+4. **拉取远端引用**：`git -C <dir> fetch origin`（需联网 + GitHub 凭证；缺失则本步中止并报原因）。
+5. **确定默认分支**：`DEFAULT_BRANCH=$(git -C <dir> symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo main)`；若 `origin/<DEFAULT_BRANCH>` 不存在，回退 `master`。
+6. **对齐本地仓库与远端（仅初始化场景）**：
+   - 本地尚无提交时，用 `git -C <dir> reset --mixed origin/<DEFAULT_BRANCH>` 将 HEAD 指向远端提交、重置索引，但**保留工作区文件**（被 Step 3 跳过的二进制文件以未跟踪状态保留，不会被删）。配合 `core.autocrlf=false`，内容与远端一致时工作区即干净。
+   - 已存在本地提交（重跑场景）→ **不要 reset**，避免丢弃本地历史；直接跳到步骤 7。
+7. **设置跟踪**：`git -C <dir> branch -u origin/<DEFAULT_BRANCH> <DEFAULT_BRANCH>`（初始化场景因 reset 已存在该分支；重跑场景若分支已缺则仅写配置：`git -C <dir> config branch.<DEFAULT_BRANCH>.remote origin && git -C <dir> config branch.<DEFAULT_BRANCH>.merge refs/heads/<DEFAULT_BRANCH>`）。
+8. **校验**：`git -C <dir> status` 应显示 `up to date with 'origin/<DEFAULT_BRANCH>'` 或 `nothing to commit, working tree clean`（被跳过的二进制文件可能列为 untracked，属正常）。
+
+> 完成后本地目录既是普通项目文件夹，又是与 GitHub 关联的 git 仓库，后续 `git push` / `git pull` 即可增量同步。被 Step 3 跳过的二进制文件不会自动进远端，除非用户自行 `add`+`commit`+`push`。
+
 ### Step 7: 验证与反馈
 
 - push 成功后报告仓库 URL（`https://github.com/<owner>/<repo>`）与推送文件数。
+- 报告本地 git 仓库状态：是否已初始化、remote 指向、分支与 `origin/<DEFAULT_BRANCH>` 是否同步（见 Step 6.5）；本步失败需明确提示原因（如缺 git / 无网络 / 无凭证）。
 - 列出被跳过的二进制文件及原因。
 
 ## 含二进制文件的项目
@@ -97,6 +119,7 @@ agent_created: true
 - 目录为空或无源码文件：至少生成并推送 README.md。
 - 大量文件时仍可一次 `push_files` 调用完成；文件过多或单文件过大可分批。
 - 敏感文件（`.env`、密钥、证书）默认排除，不要推送。
+- Step 6.5 本地初始化为「尽力而为」：本地无 git / 断网 / 无 GitHub 凭证时，远端推送仍成功，仅跳过本地建仓并提示原因。重跑（本地已有提交）时不执行 `reset`，以免丢弃本地历史。
 
 ## 使用示例
 
