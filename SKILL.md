@@ -68,21 +68,29 @@ agent_created: true
 
 `push_files` 走 API，不会在本地建仓。为让本地项目目录与 GitHub 双向同步，推送成功后顺带把本地目录变成已连接 `origin` 的 git 仓库。本步为「尽力而为」：若本地 git / 联网 / 凭证不可用，远端推送仍视为成功，仅跳过本步并在反馈中说明。
 
-1. **判断是否已是 git 仓库**：`git -C <dir> rev-parse --is-inside-work-tree 2>/dev/null`。
+**避免弹窗**：本步骤所有 git 命令在调用前应设置环境变量 `GCM_INTERACTIVE=never`（Windows Git Credential Manager 不弹交互窗）和 `GIT_TERMINAL_PROMPT=0`（不弹终端用户名/密码提示）。例如：
+```bash
+export GCM_INTERACTIVE=never
+export GIT_TERMINAL_PROMPT=0
+git -C <dir> fetch origin
+```
+若因此失败并提示认证错误，说明 GCM 尚未缓存 GitHub 凭证，应提示用户先在本地手动执行一次 `git ls-remote https://github.com/<owner>/<repo>.git` 完成登录缓存，或运行 `git config --global credential.helper manager` 固定 helper。
+
+1. **判断是否已是 git 仓库**：`GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> rev-parse --is-inside-work-tree 2>/dev/null`。
    - 已是 → 跳到步骤 4（仅补齐 remote 与 upstream，不破坏现有历史）。
-   - 不是 → `git -C <dir> init -b main`（不立即提交，避免产生与远端无关的独立历史）。
-2. **写仓库级配置，防 Windows 行尾符误判**：`git -C <dir> config core.autocrlf false`（保持与 GitHub 一致的 LF，避免后续提交来回转换）。
+   - 不是 → `GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> init -b main`（不立即提交，避免产生与远端无关的独立历史）。
+2. **写仓库级配置，防 Windows 行尾符误判**：`GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> config core.autocrlf false`（保持与 GitHub 一致的 LF，避免后续提交来回转换）。
 3. **设置远端**（URL 取 `https://github.com/<owner>/<repo>.git`）：
-   - 无 `origin` → `git -C <dir> remote add origin <url>`；
-   - 有 `origin` 但 URL 不符 → `git -C <dir> remote set-url origin <url>`。
-4. **拉取远端引用**：`git -C <dir> fetch origin`（需联网 + GitHub 凭证；缺失则本步中止并报原因）。
-5. **确定默认分支**（提取纯分支名，不含 `origin/` 前缀）：`DEFAULT_BRANCH=$(git -C <dir> symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's#^refs/remotes/origin/##')`；为空则 `DEFAULT_BRANCH=main`；若 `origin/<DEFAULT_BRANCH>` 引用不存在，回退 `master`。
+   - 无 `origin` → `GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> remote add origin <url>`；
+   - 有 `origin` 但 URL 不符 → `GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> remote set-url origin <url>`。
+4. **拉取远端引用**：`GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> fetch origin`（需联网 + GitHub 凭证；缺失则本步中止并报原因）。
+5. **确定默认分支**（提取纯分支名，不含 `origin/` 前缀）：`DEFAULT_BRANCH=$(GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's#^refs/remotes/origin/##')`；为空则 `DEFAULT_BRANCH=main`；若 `origin/<DEFAULT_BRANCH>` 引用不存在，回退 `master`。
 6. **对齐本地仓库与远端**：
-   - 本地尚无提交（初始化场景）→ `git -C <dir> reset --mixed origin/<DEFAULT_BRANCH>`：HEAD 指向远端提交、重置索引，但**保留工作区文件**（被 Step 3 跳过的二进制文件以未跟踪状态保留，不会被删）。配合 `core.autocrlf=false`，内容与远端一致时工作区即干净。
-   - 本地已有提交（重跑 / 已是仓库场景）→ 优先 `git -C <dir> merge --ff-only origin/<DEFAULT_BRANCH>`（仅快进，不丢失本地历史）；若不可快进（本地与远端分叉），**不要 reset**，提示用户手动 `git pull` / `git rebase`，直接跳到步骤 7。
-   - 行尾符差异：`reset` / `merge` 后若 `git status` 仍显示文件 modified 且 `git diff --ignore-all-space` 为空，说明是 CRLF/LF 差异，执行 `git -C <dir> checkout -- .` 将工作区归一为远端 LF 即可变干净。
-7. **设置跟踪**：`git -C <dir> branch -u origin/<DEFAULT_BRANCH> <DEFAULT_BRANCH>`（初始化场景因 reset 已存在该分支；重跑场景若分支已缺则仅写配置：`git -C <dir> config branch.<DEFAULT_BRANCH>.remote origin && git -C <dir> config branch.<DEFAULT_BRANCH>.merge refs/heads/<DEFAULT_BRANCH>`）。
-8. **校验**：`git -C <dir> status` 应显示 `up to date with 'origin/<DEFAULT_BRANCH>'` 或 `nothing to commit, working tree clean`（被跳过的二进制文件可能列为 untracked，属正常）。
+   - 本地尚无提交（初始化场景）→ `GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> reset --mixed origin/<DEFAULT_BRANCH>`：HEAD 指向远端提交、重置索引，但**保留工作区文件**（被 Step 3 跳过的二进制文件以未跟踪状态保留，不会被删）。配合 `core.autocrlf=false`，内容与远端一致时工作区即干净。
+   - 本地已有提交（重跑 / 已是仓库场景）→ 优先 `GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> merge --ff-only origin/<DEFAULT_BRANCH>`（仅快进，不丢失本地历史）；若不可快进（本地与远端分叉），**不要 reset**，提示用户手动 `git pull` / `git rebase`，直接跳到步骤 7。
+   - 行尾符差异：`reset` / `merge` 后若 `GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> status` 仍显示文件 modified 且 `GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> diff --ignore-all-space` 为空，说明是 CRLF/LF 差异，执行 `GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> checkout -- .` 将工作区归一为远端 LF 即可变干净。
+7. **设置跟踪**：`GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> branch -u origin/<DEFAULT_BRANCH> <DEFAULT_BRANCH>`（初始化场景因 reset 已存在该分支；重跑场景若分支已缺则仅写配置：`GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> config branch.<DEFAULT_BRANCH>.remote origin && GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> config branch.<DEFAULT_BRANCH>.merge refs/heads/<DEFAULT_BRANCH>`）。
+8. **校验**：`GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git -C <dir> status` 应显示 `up to date with 'origin/<DEFAULT_BRANCH>'` 或 `nothing to commit, working tree clean`（被跳过的二进制文件可能列为 untracked，属正常）。
 
 > 完成后本地目录既是普通项目文件夹，又是与 GitHub 关联的 git 仓库，后续 `git push` / `git pull` 即可增量同步。被 Step 3 跳过的二进制文件不会自动进远端，除非用户自行 `add`+`commit`+`push`。
 
@@ -90,6 +98,7 @@ agent_created: true
 
 - push 成功后报告仓库 URL（`https://github.com/<owner>/<repo>`）与推送文件数。
 - 报告本地 git 仓库状态：是否已初始化、remote 指向、分支与 `origin/<DEFAULT_BRANCH>` 是否同步（见 Step 6.5）；本步失败需明确提示原因（如缺 git / 无网络 / 无凭证）。
+- 确认本地 git 操作过程未弹出 GCM 选择器/登录窗（运行前已设置 `GCM_INTERACTIVE=never` 和 `GIT_TERMINAL_PROMPT=0`）。
 - 列出被跳过的二进制文件及原因。
 
 ## 含二进制文件的项目
@@ -98,9 +107,9 @@ agent_created: true
 
 1. `git init`（若非仓库）→ `git add -A` → `git commit -m "Initial commit"`。
 2. `git remote add origin https://github.com/<owner>/<repo>.git`。
-3. `git push -u origin main`。
+3. `GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git push -u origin main`（避免 GCM 弹窗；若凭证未缓存会失败，此时先手动登录一次）。
 
-注意：本地 git 推送需要 GitHub 认证（HTTPS PAT 或 SSH key）。MCP 连接器的 token 不直接暴露给 git CLI，须先确认用户已配置凭据，否则提示用户提供 PAT 或配置 SSH。
+注意：本地 git 推送需要 GitHub 认证（HTTPS PAT 或 SSH key）。MCP 连接器的 token 不直接暴露给 git CLI，须先确认用户已配置凭据，否则提示用户提供 PAT 或配置 SSH。运行 git 命令前统一设置 `GCM_INTERACTIVE=never` 和 `GIT_TERMINAL_PROMPT=0` 防止弹窗。
 
 ## 建仓失败（403）的备用方案
 
@@ -109,7 +118,7 @@ agent_created: true
 1. **优先用本地 git 凭据 + API 建仓**（无需用户手动操作）：
    - 查 GCM 缓存的 GitHub token：`printf "protocol=https\nhost=github.com\n\n" | GCM_INTERACTIVE=never git credential fill`（输出含 `username` 与 `password`，password 即 token，**勿打印到回复**）。
    - 用 token 调 API 建仓：`curl -s -X POST https://api.github.com/user/repos -H "Authorization: Bearer <token>" -d '{"name":"<repo>","private":false}'`。
-   - git 推送：`git init && git add -A && git commit && git branch -M main && git remote add origin https://github.com/<owner>/<repo>.git && git push -u origin main`（HTTPS 由 GCM 自动认证）。
+   - git 推送：`git init && git add -A && git commit && git branch -M main && git remote add origin https://github.com/<owner>/<repo>.git && GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git push -u origin main`（HTTPS 由 GCM 自动认证，环境变量避免弹窗）。
 2. **SSH 备用**：`~/.ssh` 有 key 且已加到 GitHub 时，`git@github.com` 22 端口常被墙，改用 443：remote 写 `ssh://git@ssh.github.com:443/<owner>/<repo>.git`。
 3. **仍无凭据**：让用户在网页手动创建空仓库（勿初始化 README），再回到 Step 6 用 `push_files`（Contents 权限通常正常）。
 
@@ -121,6 +130,7 @@ agent_created: true
 - 大量文件时仍可一次 `push_files` 调用完成；文件过多或单文件过大可分批。
 - 敏感文件（`.env`、密钥、证书）默认排除，不要推送。
 - Step 6.5 本地初始化为「尽力而为」：本地无 git / 断网 / 无 GitHub 凭证时，远端推送仍成功，仅跳过本地建仓并提示原因。重跑（本地已有提交）时优先 `merge --ff-only`，不可快进则提示用户手动 `git pull`/`rebase`，不执行 `reset` 以免丢弃本地历史。
+- 所有本地 git 命令应前置 `GCM_INTERACTIVE=never` 和 `GIT_TERMINAL_PROMPT=0` 环境变量，避免 WorkBuddy 运行时弹出 Git Credential Manager 选择器或终端认证提示。若因此失败，提示用户先手动 `git ls-remote https://github.com/<owner>/<repo>.git` 登录一次以缓存凭证，或运行 `git config --global credential.helper manager` 固定 helper。
 
 ## 使用示例
 
