@@ -12,7 +12,8 @@ agent_created: true
 
 ## 前置条件
 
-- `github` 连接器已连接（提供 `mcp__github__*` 工具）。
+- `github` 连接器已连接（提供 `mcp__github__*` 工具，可推送文件，但**无建仓权限**）。
+- `github-push-pat` MCP server（PAT 认证）已配置并「信任」（提供 `mcp__github-push-pat__*` 工具，**可建仓**）。若未启用，建仓走下方「建仓失败（403）的备用方案」。
 - 本地 `gh` CLI 可不存在；本地 git 身份仅用于 commit 信息参考。
 
 ## 工作流
@@ -40,23 +41,23 @@ agent_created: true
 
 ### Step 4: 获取账号信息
 
-- 调用 `mcp__github__get_me` 获取登录用户名作为 `owner`。
+- 调用 `mcp__github__get_me`（或 `mcp__github-push-pat__get_me`，两者均可）获取登录用户名作为 `owner`。
 - 用户指定组织时，`owner` 用组织名。
 
 ### Step 5: 创建仓库
 
-调用 `mcp__github__create_repository`：
+优先调用 `mcp__github-push-pat__create_repository`（PAT 认证，可建仓）；若该工具不可用，回退 `mcp__github__create_repository`：
 
 - `name`: 仓库名
 - `private`: `true` / `false`
 - `description`: 项目一句话描述
 - `organization`: 可选
 - 不要设 `autoInit: true`（会生成带 README 的初始提交，与后续 push 冲突）。
-- 若返回 `403 Resource not accessible by integration`（连接器无 Administration/建仓权限），见下方「建仓失败（403）的备用方案」。
+- 若 `mcp__github__create_repository` 返回 `403 Resource not accessible by integration`（连接器无 Administration/建仓权限），见下方「建仓失败（403）的备用方案」。
 
 ### Step 6: 推送文件
 
-调用 `mcp__github__push_files`，一次性传入所有文件（含 README.md）：
+调用 `mcp__github__push_files` 或 `mcp__github-push-pat__push_files`（两者均可），一次性传入所有文件（含 README.md）：
 
 - `owner` / `repo`：同 Step 5。
 - `branch`：`main`（新仓库默认）。若报分支不存在，改试 `master`。
@@ -80,7 +81,7 @@ agent_created: true
 
 ## 建仓失败（403）的备用方案
 
-`create_repository` 报 `403 Resource not accessible by integration` 时，说明 github 连接器缺建仓权限（此权限由连接器请求的 scope 决定，重新授权也无法自行添加）。按以下顺序降级：
+`github-push-pat` server 未启用、且 `mcp__github__create_repository` 报 `403 Resource not accessible by integration` 时，说明原 github 连接器缺建仓权限（此权限由连接器请求的 scope 决定，重新授权也无法自行添加）。按以下顺序降级：
 
 1. **优先用本地 git 凭据 + API 建仓**（无需用户手动操作）：
    - 查 GCM 缓存的 GitHub token：`printf "protocol=https\nhost=github.com\n\n" | GCM_INTERACTIVE=never git credential fill`（输出含 `username` 与 `password`，password 即 token，**勿打印到回复**）。
