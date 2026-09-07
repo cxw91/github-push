@@ -1,6 +1,6 @@
 ---
 name: github-push
-description: This skill should be used when the user wants to push or upload a local project to GitHub. It auto-generates a README.md when one is missing, then creates the repository and pushes all files via the github MCP connector. Trigger phrases include: 推送到GitHub、上传到GitHub、push到GitHub、发布到GitHub、github push、上传项目到github、把项目推到github.
+description: "This skill should be used when the user wants to push or upload a local project to GitHub. It auto-generates a README.md when one is missing, then creates the repository and pushes all files via the github MCP connector. Trigger phrases include: 推送到GitHub、上传到GitHub、push到GitHub、发布到GitHub、github push、上传项目到github、把项目推到github."
 agent_created: true
 ---
 
